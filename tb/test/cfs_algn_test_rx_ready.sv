@@ -1,0 +1,113 @@
+
+`ifndef CFS_ALGN_TEST_RX_READY_SV
+`define CFS_ALGN_TEST_RX_READY_SV
+
+class cfs_algn_test_rx_ready extends cfs_algn_test_base;
+
+  `uvm_component_utils(cfs_algn_test_rx_ready)
+
+  function new(string name = "", uvm_component parent = null);
+    super.new(name, parent);
+  endfunction
+
+  virtual task run_phase(uvm_phase phase);
+
+    cfs_md_sequence_slave_response_forever resp_seq;
+    cfs_algn_virtual_sequence_reg_config cfg_seq;
+    cfs_algn_virtual_sequence_rx_size4_offset0 rx_seq40;
+    cfs_md_sequence_md_tx_ready_zero txzero_seq;
+
+    cfs_algn_vif vif;
+
+    uvm_reg_data_t irqen_val;
+    uvm_reg_data_t control_val;
+    uvm_reg_data_t status_val;
+
+    uvm_status_e status;
+    int i;
+    phase.raise_objection(this, "TEST_START");
+
+    #(100ns);
+
+    // Step 1: Start back-pressure simulation from DUT by blocking MD_TX_READY signal
+    fork
+      begin
+        txzero_seq = cfs_md_sequence_md_tx_ready_zero::type_id::create("txzero_seq");
+        txzero_seq.start(env.md_tx_agent.sequencer);
+      end
+    join_none
+
+    // Step 2: Configure DUT registers using register config virtual sequence
+    cfg_seq = cfs_algn_virtual_sequence_reg_config::type_id::create("cfg_seq");
+    cfg_seq.set_sequencer(env.virtual_sequencer);
+    cfg_seq.start(env.virtual_sequencer);
+
+    // Step 3: Enable all interrupt sources
+    env.model.reg_block.IRQEN.read(status, irqen_val, UVM_FRONTDOOR);
+    irqen_val = 32'h0000001f;  // Enable all IRQ bits
+    env.model.reg_block.IRQEN.write(status, irqen_val, UVM_FRONTDOOR);
+    `uvm_info("IRQEN_UPDATE", $sformatf("IRQEN updated: 0x%0h", irqen_val), UVM_MEDIUM)
+
+    // Step 4: Manually configure CTRL register with offset=0, size=4 to initiate aligner
+    env.model.reg_block.CTRL.write(status, 32'h00000001, UVM_FRONTDOOR);
+    env.model.reg_block.CTRL.read(status, control_val, UVM_FRONTDOOR);
+    `uvm_info("CTRL_WRITE", $sformatf("CTRL register value: 0x%0h", control_val), UVM_MEDIUM)
+
+    // Step 5: Wait for stabilization
+    vif = env.env_config.get_vif();
+    repeat (50) @(posedge vif.clk);
+    $display("----------------------------------------------------------------------------");
+    $display("------------------Starting RX  BP------------------");
+    $display("----------------------------------------------------------------------------");
+
+    // Step 6: Send 11 RX packets with size=4 and offset=0
+    for (i = 0; i < 8; i++) begin
+      rx_seq40 =
+          cfs_algn_virtual_sequence_rx_size4_offset0::type_id::create($sformatf("rx_size4_%0d", i));
+      rx_seq40.set_sequencer(env.virtual_sequencer);
+      void'(rx_seq40.randomize());
+      rx_seq40.start(env.virtual_sequencer);
+    end
+
+    repeat (50) @(posedge vif.clk);
+    env.model.reg_block.STATUS.read(status, status_val, UVM_FRONTDOOR);
+
+    // Step 7: Release MD_TX_READY back-pressure and allow DUT to send responses
+    $display("[%0t] Releasing back-pressure fork", $time);
+    disable fork;
+
+    // Step 8: Start slave response sequence again (now DUT can send data)
+    fork
+      begin
+        resp_seq = cfs_md_sequence_slave_response_forever::type_id::create("resp_seq");
+        resp_seq.start(env.md_tx_agent.sequencer);
+      end
+    join_none
+
+    $display(
+        "--------------------------------------------------------------------------------------------------");
+    $display("------------------Starting additional RX after relieving BP------------------");
+    $display(
+        "---------------------------------------------------------------------------------------------------");
+    // Step 9: Send another RX packet after relieving back-pressure
+
+    #(100ns);
+
+    for (i = 0; i < 1; i++) begin
+      rx_seq40 = cfs_algn_virtual_sequence_rx_size4_offset0::type_id::create(
+          $sformatf("rx_size4_postBP_%0d", i));
+      rx_seq40.set_sequencer(env.virtual_sequencer);
+      void'(rx_seq40.randomize());
+      rx_seq40.start(env.virtual_sequencer);
+    end
+
+    // Optional wait for all transactions and scoreboard to settle
+    #(5000ns);
+
+    phase.drop_objection(this, "TEST_DONE");
+
+  endtask
+
+endclass
+
+`endif
