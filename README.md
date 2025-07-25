@@ -171,7 +171,7 @@ make report
 
 ## 📧 Contact
 
-**Keerthi Sree Somasi**\
+[**Keerthi Sree Somasi**](https://www.linkedin.com/in/keerthi-somasi/)\
 Aligner Verification Project | VLSI Design Verification Intern\
 Feel free to open issues or reach out for collaboration!
 
